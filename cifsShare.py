@@ -2,6 +2,8 @@ import os
 import sys
 import subprocess
 import pathlib
+import logging
+
 class cifsShare():
     def __init__(self, server = '',
                  share_name = '',
@@ -32,6 +34,7 @@ class cifsShare():
         self.end_comment_line = '#-end- Lines added below are added by the script named viv'
 
         if self.credential_file != '':
+             logging.info("Creating the Credential file")
              self.create_cred_file()
         #self.verify_create_mount_folder()
 
@@ -93,46 +96,60 @@ class cifsShare():
 
     def verify_create_mount_folder(self):
         import pathlib
+        #create a pathlib object so as we can manuplate path easily
         mount_fld = pathlib.Path(self.mount_folder)
-        print("mount_fld="+str(mount_fld))
+
+        #add the sharename to the path if the self.create_mount_fld_as_sharename is true
         if self.create_mount_fld_as_sharename:
             if mount_fld.name == self.share_name:
                 pass
             else:
                 mount_fld = mount_fld.joinpath(self.share_name)
-        print("after create share name check mount_fld=" + str(mount_fld))
+
+
+        # if the mount_fld exists
+        logging.debug("(Before)The Mount folder {0} exists".format(str(mount_fld)))
         if mount_fld.exists():
-            print("inside mount_fld.exists mount_fld=" + str(mount_fld))
+            logging.debug("(After)The Mount folder {0} exists".format(str(mount_fld)))
+            #if the mount_fld is not a mount point return true
             if not os.path.ismount(str(mount_fld)):
+                logging.debug("The Mount folder {0} is not a mount point".format(str(mount_fld)))
                 return True
+            #if the mount_fld is a mount point we need to unmount and remount
             else:
-                print("inside else (ismount is true) mount_fld=" + str(mount_fld))
-                print("Something already mounted on the mount folder!! Unmounting and retrying")
+                logging.debug("The Mount folder {0} is a mount point".format(str(mount_fld)))
+                logging.debug("Something already mounted on the mount folder: {0} !! Unmounting and retrying".format(str(mount_fld)))
+                #Create a umount command for unmounting the folder
                 connection_string = list()
                 connection_string.append('umount')
+                connection_string.append('--force')
                 connection_string.append(str(mount_fld))
 
                 try:
+                    logging.debug("Running the UMount Command to unmount")
                     output = subprocess.check_call(connection_string, stderr=subprocess.STDOUT, timeout=4)
                 except subprocess.CalledProcessError as e:
-                    print("returncode: --: " + str(e.returncode))
-                    print("output:  " + output)
+                    logging.error("Could Not run umount command | Returncode= ",e.returncode)
                     errorcode = e.returncode
-
-                print(output)
-                if output == 0:
-                    print("UMount Sucessful!!!!, mounting")
-                    return True
-                else:
-                    return False
+                finally:
+                    if not 'errorcode' is locals():  # Check if the variable errorcode is not set in the except block above
+                        logging.debug("UMount Sucessful!!!!, mounting")
+                        return True
+                    else:
+                        logging.warning("Could not UnMount at the path:- ", str(mount_fld))
+                        return False
         else:
             try:
+                logging.info("Creating Mount folder:- {0}".format(str(mount_fld)))
                 mount_fld.mkdir()
-            except exception as e:
-                print("Cannot Create the Mount Folder")
-                sys.exit(1)
+            except Exception as e:
+                logging.warning("Cannot Create the Mount Folder, Exiting !")
+                exception = e
             finally:
-                return True
+                if not 'exception' in locals():
+                    return True
+                else:
+                    sys.exit(1)
 
     def get_mount_folder(self):
         mount_fld = pathlib.Path(self.mount_folder)
@@ -156,11 +173,15 @@ class cifsShare():
 
     def create_cred_file(self):
         if self.credential_file != '':
-            import pathlib, pwd, stat
+            import pathlib  # used to easily handle the path
+            import pwd # used to get the chmod users home directory and its uid and gid
+
             try:
+                logging.info("Verified that the supplied chmod user ")
                 usr = pwd.getpwnam(self.chmod_user)
             except Exception as e:
-                sys.exit("The user: "+self.chmod_user+" was not found in the user database")
+                logging.error("The user: "+self.chmod_user+" was not found in the user database")
+                sys.exit(1)
 
             user_home_dir = usr.pw_dir
             user_home_dir = pathlib.Path(user_home_dir)
@@ -181,13 +202,13 @@ class cifsShare():
                 os.chown(str(user_home_dir), usr.pw_uid, usr.pw_gid)
                 os.chmod(str(user_home_dir),600)
             except Exception as e:
-                print("Could not alter the credentials files permissions")
-                print(e)
+                logging.error("Could not alter the credentials files permissions", e)
                 sys.exit(1)
 
             return str(user_home_dir)
         else:
-            sys.exit("The Credential file to create and use not supplied!")
+            logging.error("The Credential file to create and use was not supplied!")
+            sys.exit(1)
 
     def create_fstab_entries(self):
         strin = ""
@@ -215,17 +236,16 @@ class cifsShare():
         compare and check of the current share is added in the fstab shares and remeve it and re add it
         '''
         # -Start- Get the start comment line# and the End Comment line#
-        print("inside add_fstab_entries")
         startline = int()  # records the line# where the start comments is
         endline = int()  # records the line# where the end comments is
-        if self.file_access(self.fstab_file_loc, 'w'):
-            print("inside inside file access check")
+        if self.file_access(self.fstab_file_loc, 'w') and self.file_access(self.fstab_file_loc, 'r'):
             # open the file and read all the lines in the lines var
             try:
                 f = open(self.fstab_file_loc, 'r')
                 lines = f.readlines()
             except Exception as e:
-                sys.exit("cannot open fstab for reading!!")
+                logging.error("cannot open fstab for reading!!")
+                sys.exit(1)
             finally:
                 f.close()
 
@@ -239,51 +259,55 @@ class cifsShare():
                 elif str_line == self.end_comment_line:
                     endline = line
 
-                line = line + 1
+                #line = line + 1
             # -End- Get the start comment line# and the End Comment line#
 
-            # -start- remove the lines between start an end comment including the comment
+            # -start- if the startline is >= 0 thatmeans the start line was found hence start processing
+            #  the  entries after the start comment line
 
             if startline >= 0 and endline > 0:
                 fstab_shares = list()
                 for shr in range(startline+1,endline):
                     share = lines[shr].split(sep='\t', maxsplit=6)
                     fstab_shares.append(share)
+                    # if the share[1] in the fstab file is the same as the mountfolder means that the entries already
+                    # exists and hence we need to remove and readd the same or updated entry
                     if share[1] == self.get_mount_folder():
-                        print("Fstab already includes a mountpoint at: " + self.mount_folder + "updating the entry ")
+                        logging.info("Fstab already includes a mountpoint at: " + self.mount_folder + "updating the entry ")
                         lines[shr] = self.create_fstab_entries()
-                        print("inside if " + str(fstab_shares))
+                    # if the entry was not found add the entry in the list
                     else:
-                        print("didnt find the entry in the fstab between comments, hence adding new")
+                        logging.info("didnt find the entry in the fstab between comments, hence adding new")
                         lines.insert(endline -1, self.create_fstab_entries() +'\n')
-                        print("inside else " + str(fstab_shares))
-                #lines.insert(endline, self.create_fstab_entries())
+            # if the startline comment not found add the comments and then the  fstab share entry
             else:
+                logging.info("no comment line found hence adding fstab with comments")
                 fstab_shares = list()
                 lines.append('\n\n')
                 lines.append(self.start_comment_line+'\n')
                 lines.append(self.create_fstab_entries()+'\n')
                 lines.append(self.end_comment_line+'\n')
-                print("no comment line found hence adding with comments" + str(lines))
+
 
             # write the new fstab file
 
             try:
                 f = open(self.fstab_file_loc, 'w')
                 f.writelines(lines)
-                '''
-                for ln in range(len(lines)):
-                    f.write(lines[ln])
-                    f.write('\n')
-                '''
             except Exception as e:
-                sys.exit("cannot open fstab for Writing !!:- "+str(e))
+                logging.error("cannot open fstab for Writing !!:- " + str(e))
+                returncode = e
+
             finally:
                 f.close()
+                if e in locals():
+                    sys.exit("cannot open fstab for Writing !!:- " + str(e))
+
 
             # -End- remove the lines between start an end comment including the comment
         else:
-            print("write access denied to fstab file: - " + self.fstab_file_loc)
+            logging.error("write access denied to fstab file: - " + self.fstab_file_loc)
+            sys.exit(1)
 
     def create_mount_cmd(self):
         #sudo mount -t cifs -o username=yourusername,password=yourpassword //WindowsPC/share1 /mnt/mountfoldername
@@ -300,25 +324,19 @@ class cifsShare():
 
     def run_mount_cmd(self):
         if self.verify_create_mount_folder():
-            print("inside verify mount folder")
-            '''
-                Run the command and get the output to a var output and decode to utf-8 from bytes
-                '''
+            #Run the command and get the output to a var output and decode to utf-8 from bytes
+
             process_mount_cmdlets = self.create_mount_cmd()
             try:
-                print("inside try block")
                 output = subprocess.check_call(process_mount_cmdlets, stderr=subprocess.STDOUT, timeout=4)
             except subprocess.CalledProcessError as e:
-                print("inside except block")
-                print("returncode: --: " + e.returncode)
-                print("output:  " + output)
+                output = 1
                 errorcode = e.returncode
 
-            print("compleate try-except block   ")
             if output == 0:
-                print("Mount Sucessful!!!!")
+                logging.info("Mount Sucessful!!!!")
             else:
-                print("could not mount th Filesystem !!!!")
+                logging.error("could not mount the Filesystem !!!!")
         else:
-            print("could not verify_create mount Diectory!")
-            sys.exit(1)
+            logging.error("could not verify and or create mount Directory!")
+            sys.exit("could not verify and or create mount Directory!")
