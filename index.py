@@ -315,7 +315,7 @@ def main():
     #Get_Info_and_Create_vars()
     fstab_file = '/home/vivek/test_fstab'
     '''
-    cifsmount=autoMountCifs('192.168.1.2', 'vivek', 'adw31', 'vivek',
+    cifsmount=autoMountCifs('192.168.1.2', 'vivek', 'password', 'vivek',
                             skip_shares_description = ['Remote Admin', 'Default share', 'Remote IPC'],
                             cred_file_name = '.autocifsmountcredfile', fstab_loc = fstab_file,
                             mount_folder = '/media')
